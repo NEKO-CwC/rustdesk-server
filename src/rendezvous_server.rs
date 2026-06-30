@@ -514,6 +514,7 @@ impl RendezvousServer {
                 }
                 Some(rendezvous_message::Union::RelayResponse(mut rr)) => {
                     let addr_b = AddrMangle::decode(&rr.socket_addr);
+                    let socket_addr_v6 = rr.socket_addr_v6.clone();
                     rr.socket_addr = Default::default();
                     let id = rr.id();
                     if !id.is_empty() {
@@ -529,6 +530,7 @@ impl RendezvousServer {
                             rr.relay_server = self.get_relay_server(addr.ip(), addr_b.ip());
                         }
                     }
+                    rr.socket_addr_v6 = socket_addr_v6;
                     msg_out.set_relay_response(rr);
                     allow_err!(self.send_to_tcp_sync(msg_out, addr_b).await);
                 }
@@ -622,16 +624,20 @@ impl RendezvousServer {
         // punch hole sent from B, tell A that B is ready to be connected
         let addr_a = AddrMangle::decode(&phs.socket_addr);
         log::debug!(
-            "{} punch hole response to {:?} from {:?}",
+            "{} punch hole response to {:?} from {:?}, socket_addr_v6_non_empty={}",
             if socket.is_none() { "TCP" } else { "UDP" },
             &addr_a,
-            &addr
+            &addr,
+            !phs.socket_addr_v6.is_empty()
         );
         let mut msg_out = RendezvousMessage::new();
         let mut p = PunchHoleResponse {
             socket_addr: AddrMangle::encode(addr).into(),
             pk: self.get_pk(&phs.version, phs.id).await,
             relay_server: phs.relay_server.clone(),
+            socket_addr_v6: phs.socket_addr_v6,
+            upnp_port: phs.upnp_port,
+            is_udp: socket.is_some(),
             ..Default::default()
         };
         if let Ok(t) = phs.nat_type.enum_value() {
@@ -656,16 +662,18 @@ impl RendezvousServer {
         // relay local addrs of B to A
         let addr_a = AddrMangle::decode(&la.socket_addr);
         log::debug!(
-            "{} local addrs response to {:?} from {:?}",
+            "{} local addrs response to {:?} from {:?}, socket_addr_v6_non_empty={}",
             if socket.is_none() { "TCP" } else { "UDP" },
             &addr_a,
-            &addr
+            &addr,
+            !la.socket_addr_v6.is_empty()
         );
         let mut msg_out = RendezvousMessage::new();
         let mut p = PunchHoleResponse {
             socket_addr: la.local_addr.clone(),
             pk: self.get_pk(&la.version, la.id).await,
             relay_server: la.relay_server,
+            socket_addr_v6: la.socket_addr_v6,
             ..Default::default()
         };
         p.set_is_local(true);
@@ -754,27 +762,34 @@ impl RendezvousServer {
             let socket_addr = AddrMangle::encode(addr).into();
             if same_intranet {
                 log::debug!(
-                    "Fetch local addr {:?} {:?} request from {:?}",
+                    "Fetch local addr {:?} {:?} request from {:?}, socket_addr_v6_non_empty={}",
                     id,
                     peer_addr,
-                    addr
+                    addr,
+                    !ph.socket_addr_v6.is_empty()
                 );
                 msg_out.set_fetch_local_addr(FetchLocalAddr {
                     socket_addr,
                     relay_server,
+                    socket_addr_v6: ph.socket_addr_v6,
                     ..Default::default()
                 });
             } else {
                 log::debug!(
-                    "Punch hole {:?} {:?} request from {:?}",
+                    "Punch hole {:?} {:?} request from {:?}, socket_addr_v6_non_empty={}",
                     id,
                     peer_addr,
-                    addr
+                    addr,
+                    !ph.socket_addr_v6.is_empty()
                 );
                 msg_out.set_punch_hole(PunchHole {
                     socket_addr,
                     nat_type: ph.nat_type,
+                    udp_port: ph.udp_port,
+                    force_relay: ph.force_relay,
+                    upnp_port: ph.upnp_port,
                     relay_server,
+                    socket_addr_v6: ph.socket_addr_v6,
                     ..Default::default()
                 });
             }
